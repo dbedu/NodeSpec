@@ -450,6 +450,96 @@ function generate_final_report_legacy(){
     _yellow "$md_report_path"
 }
 
+# ==================================================================
+# API INTEGRATION FUNCTIONS (No JQ Dependencies)
+# ==================================================================
+
+function upload_results_to_api(){
+    _green_bold "\n========== Uploading Results to API =========="
+
+    local api_endpoint="https://api.nodespec.com/submit"
+    local test_time=$(date +"%Y-%m-%d %H:%M:%S")
+    local test_id="${current_time}_$(uname -n | cut -d'.' -f1)"
+
+    _blue "Collecting result files..."
+    local files=()
+    local file_list=(
+        "$header_info_filename"
+        "$basic_info_filename"
+        "$yabs_json_filename"
+        "$ip_quality_filename"
+        "$ip_quality_json_filename"
+        "$net_quality_filename"
+        "$net_quality_json_filename"
+        "$backroute_trace_filename"
+        "$backroute_trace_json_filename"
+        "$port_filename"
+    )
+
+    for filename in "${file_list[@]}"; do
+        local file_path="$result_directory/$filename"
+        if [[ -f "$file_path" ]]; then
+            files+=("$file_path")
+        fi
+    done
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        _red "Error: No result files found to upload"
+        _yellow "Skipping API upload..."
+        return 1
+    fi
+
+    _blue "Found ${#files[@]} result files"
+
+    # Prepare multipart form data
+    local curl_args=()
+    curl_args+=("-X" "POST")
+    curl_args+=("-H" "Content-Type: multipart/form-data")
+    curl_args+=("-F" "test_id=$test_id")
+    curl_args+=("-F" "test_time=$test_time")
+    curl_args+=("-F" "script_version=$SCRIPT_VERSION")
+
+    # Add each file to the form data
+    for file in "${files[@]}"; do
+        local filename=$(basename "$file")
+        curl_args+=("-F" "files[]=@$file;filename=$filename")
+    done
+
+    _blue "Uploading results to api.nodespec.com..."
+
+    # Perform the upload
+    local response=$(curl -s --max-time 30 "${curl_args[@]}" "$api_endpoint")
+    local curl_exit_code=$?
+
+    if [[ $curl_exit_code -ne 0 ]]; then
+        _red "Error: Failed to upload results (curl exit code: $curl_exit_code)"
+        _yellow "Results saved locally only."
+        return 1
+    fi
+
+    # Parse the response without jq - simple string matching
+    if echo "$response" | grep -q '"success":true' && echo "$response" | grep -q '"test_uuid"'; then
+        local test_uuid=$(echo "$response" | sed -n 's/.*"test_uuid":"\([^"]*\)".*/\1/p')
+
+        if [[ -n "$test_uuid" ]]; then
+            _green_bold "\n================================================="
+            _green_bold "         UPLOAD SUCCESSFUL!"
+            _green_bold "================================================="
+            _blue "Your test results have been uploaded successfully!"
+            _yellow "View your detailed test report at:"
+            _green_bold "https://nodespec.com/result/$test_uuid"
+            _green_bold "================================================="
+            return 0
+        fi
+    fi
+
+    # If we get here, the API response was invalid
+    _red "Error: Invalid response from API"
+    _yellow "Response: $response"
+    _yellow "Results saved locally only."
+    return 1
+}
+
 function post_cleanup(){
     echo ""
     read -p "Press [Enter] key to finish and clean up all temporary files..."

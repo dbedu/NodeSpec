@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/netifyops/develop/NodeSpec-api/app/**)",
+      "Read(//home/netifyops/develop/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
