@@ -1,17 +1,27 @@
 #!/bin/bash
 
 # Yet Another Bench Script by Mason Rowe
-# Initial Oct 2019; Last update Jan 2025
+# Initial Oct 2019; Last update Apr 2025
 
 # Disclaimer: This project is a work in progress. Any errors or suggestions should be
 #             relayed to me via the GitHub project page linked below.
 #
 # Purpose:    The purpose of this script is to quickly gauge the performance of a Linux-
 #             based server by benchmarking network performance via iperf3, CPU and
-#             overall system performance via Geekbench 4/5, and random disk
+#             overall system performance via Geekbench 4/5/6, and random disk
 #             performance via fio. The script is designed to not require any dependencies
 #             - either compiled or installed - nor admin privileges to run.
 
+YABS_VERSION="v2025-04-20"
+
+echo -e '# ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## #'
+echo -e '#              Yet-Another-Bench-Script              #'
+echo -e '#                     '$YABS_VERSION'                    #'
+echo -e '# https://github.com/masonr/yet-another-bench-script #'
+echo -e '# ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## #'
+
+echo -e
+date
 TIME_START=$(date '+%Y%m%d-%H%M%S')
 YABS_START_TIME=$(date +%s)
 
@@ -21,8 +31,7 @@ if locale -a 2>/dev/null | grep ^C$ > /dev/null; then
 	export LC_ALL=C
 else
 	# locale "C" not installed, display warning
-	# echo -e "\nWarning: locale 'C' not detected. Test outputs may not be parsed correctly."
-	: do noting
+	echo -e "\nWarning: locale 'C' not detected. Test outputs may not be parsed correctly."
 fi
 
 # determine architecture of host
@@ -50,17 +59,17 @@ else
 fi
 
 # flags to skip certain performance tests
-unset PREFER_BIN SKIP_FIO SKIP_IPERF SKIP_GEEKBENCH SKIP_NET PRINT_HELP REDUCE_NET GEEKBENCH_4 GEEKBENCH_5 GEEKBENCH_6 DD_FALLBACK IPERF_DL_FAIL JSON JSON_SEND JSON_RESULT JSON_FILE
+unset PREFER_BIN SKIP_FIO SKIP_IPERF SKIP_GEEKBENCH SKIP_NET PRINT_HELP REDUCE_NET GEEKBENCH_4 GEEKBENCH_5 GEEKBENCH_6 DD_FALLBACK IPERF_DL_FAIL JSON JSON_SEND JSON_RESULT JSON_FILE IPERF_SERVERS
 GEEKBENCH_6="True" # gb6 test enabled by default
 
 # get any arguments that were passed to the script and set the associated skip flags (if applicable)
-while getopts 'bfdignhr4596jw:s:' flag; do
+while getopts 'bfdignhr4596jw:s:p:' flag; do
 	case "${flag}" in
 		b) PREFER_BIN="True" ;;
 		f) SKIP_FIO="True" ;;
 		d) SKIP_FIO="True" ;;
 		i) SKIP_IPERF="True" ;;
-		g) SKIP_GEEKBENCH="True" ;;
+		g) SKIP_GEEKBENCH="True" && unset GEEKBENCH_6 ;;
 		n) SKIP_NET="True" ;;
 		h) PRINT_HELP="True" ;;
 		r) REDUCE_NET="True" ;;
@@ -68,9 +77,10 @@ while getopts 'bfdignhr4596jw:s:' flag; do
 		5) GEEKBENCH_5="True" && unset GEEKBENCH_6 ;;
 		9) GEEKBENCH_4="True" && GEEKBENCH_5="True" && unset GEEKBENCH_6 ;;
 		6) GEEKBENCH_6="True" ;;
-		j) JSON+="j" ;; 
+		j) JSON+="j" ;;
 		w) JSON+="w" && JSON_FILE=${OPTARG} ;;
-		s) JSON+="s" && JSON_SEND=${OPTARG} ;; 
+		s) JSON+="s" && JSON_SEND=${OPTARG} ;;
+		p) IPERF_SERVERS=${OPTARG} ;;
 		*) exit 1 ;;
 	esac
 done
@@ -139,6 +149,9 @@ if [ -n "$PRINT_HELP" ]; then
 	echo -e "       -j : print jsonified YABS results at conclusion of test"
 	echo -e "       -w <filename> : write jsonified YABS results to disk using file name provided"
 	echo -e "       -s <url> : send jsonified YABS results to URL"
+	echo -e "       -p <servers> : specify custom iperf servers (format: host:port_range:name:location:network_modes)"
+	echo -e "                      multiple servers separated by commas"
+	echo -e "                      example: -p \"example.com:5201-5210:MyServer:New York (10G):IPv4|IPv6\""
 	echo -e
 	echo -e "Detected Arch: $ARCH"
 	echo -e
@@ -152,13 +165,14 @@ if [ -n "$PRINT_HELP" ]; then
 	[[ -n $GEEKBENCH_4 ]] && echo -e "       running geekbench 4"
 	[[ -n $GEEKBENCH_5 ]] && echo -e "       running geekbench 5"
 	[[ -n $GEEKBENCH_6 ]] && echo -e "       running geekbench 6"
+	[[ -n $IPERF_SERVERS ]] && echo -e "       -p, using custom iperf servers: $IPERF_SERVERS"
 	echo -e
 	echo -e "Local Binary Check:"
-	[[ -z $LOCAL_FIO ]] && echo -e "       fio not detected, will download precompiled binary" ||
-		[[ -z $PREFER_BIN ]] && echo -e "       fio detected, using local package" ||
+	([[ -z $LOCAL_FIO ]] && echo -e "       fio not detected, will download precompiled binary") ||
+		([[ -z $PREFER_BIN ]] && echo -e "       fio detected, using local package") ||
 		echo -e "       fio detected, but using precompiled binary instead"
-	[[ -z $LOCAL_IPERF ]] && echo -e "       iperf3 not detected, will download precompiled binary" ||
-		[[ -z $PREFER_BIN ]] && echo -e "       iperf3 detected, using local package" ||
+	([[ -z $LOCAL_IPERF ]] && echo -e "       iperf3 not detected, will download precompiled binary") ||
+		([[ -z $PREFER_BIN ]] && echo -e "       iperf3 detected, using local package") ||
 		echo -e "       iperf3 detected, but using precompiled binary instead"
 	echo -e
 	echo -e "Detected Connectivity:"
@@ -171,7 +185,7 @@ if [ -n "$PRINT_HELP" ]; then
 	[[ -z $JSON ]] && echo -e "       none"
 	[[ $JSON = *j* ]] && echo -e "       printing json to screen after test"
 	[[ $JSON = *w* ]] && echo -e "       writing json to file ($JSON_FILE) after test"
-	[[ $JSON = *s* ]] && echo -e "       sharing json YABS results to $JSON_SEND" 
+	[[ $JSON = *s* ]] && echo -e "       sharing json YABS results to $JSON_SEND"
 	echo -e
 	echo -e "Exiting..."
 
@@ -193,7 +207,7 @@ function format_size {
 	# ensure the raw value is a number, otherwise return blank
 	re='^[0-9]+$'
 	if ! [[ $RAW =~ $re ]] ; then
-		echo "" 
+		echo ""
 		return 0
 	fi
 
@@ -218,7 +232,7 @@ function format_size {
 }
 
 # gather basic system information (inc. CPU, AES-NI/virt status, RAM + swap + disk size)
-echo -e 
+echo -e
 echo -e "Basic System Information:"
 echo -e "---------------------------------"
 UPTIME=$(uptime | awk -F'( |,|:)+' '{d=h=m=0; if ($7=="min") m=$6; else {if ($7~/^day/) {d=$6;h=$8;m=$9} else {h=$6;m=$7}}} {print d+0,"days,",h+0,"hours,",m+0,"minutes"}')
@@ -257,17 +271,15 @@ echo -e "RAM        : $TOTAL_RAM"
 TOTAL_SWAP_RAW=$(free | grep Swap | awk '{ print $2 }')
 TOTAL_SWAP=$(format_size "$TOTAL_SWAP_RAW")
 echo -e "Swap       : $TOTAL_SWAP"
-RAM_PLUS_SWAP="$(( TOTAL_RAM_RAW + TOTAL_SWAP_RAW ))"
 # total disk size is calculated by adding all partitions of the types listed below (after the -t flags)
-TOTAL_DISK_RAW=$(lsblk -d -n -o SIZE --bytes | awk '{sum+=$1} END {printf "%.0f\n", sum}' | numfmt --to-unit=1024)
+TOTAL_DISK_RAW=$(df -t simfs -t ext2 -t ext3 -t ext4 -t btrfs -t xfs -t vfat -t exfat -t ntfs -t swap --total 2>/dev/null | grep total | awk '{ print $2 }')
 TOTAL_DISK=$(format_size "$TOTAL_DISK_RAW")
 echo -e "Disk       : $TOTAL_DISK"
 DISTRO=$(grep 'PRETTY_NAME' /etc/os-release | cut -d '"' -f 2 )
 echo -e "Distro     : $DISTRO"
 KERNEL=$(uname -r)
 echo -e "Kernel     : $KERNEL"
-VIRT=$(dmidecode -s system-product-name 2> /dev/null || virt-what | grep -v redhat | head -n 1 || echo "none")
-#VIRT=$(virt-what | grep -v redhat | head -n 1 || echo "none")
+VIRT=$(systemd-detect-virt 2>/dev/null)
 VIRT=${VIRT^^} || VIRT="UNKNOWN"
 echo -e "VM Type    : $VIRT"
 [[ -z "$IPV4_CHECK" ]] && ONLINE="\xE2\x9D\x8C Offline / " || ONLINE="\xE2\x9C\x94 Online / "
@@ -281,7 +293,7 @@ function ip_info() {
 
 	# declare local vars
 	local ip6me_resp net_type net_ip response country region region_code city isp org as
- 
+
 	ip6me_resp="$($DL_CMD http://ip6.me/api/)"
 	net_type="$(echo "$ip6me_resp" | cut -d, -f1)"
 	net_ip="$(echo "$ip6me_resp" | cut -d, -f2)"
@@ -300,7 +312,7 @@ function ip_info() {
 	isp=$(echo "$response" | sed -e 's/[{}]/''/g' | awk -v RS=',"' -F: '/^isp/ {print $2}' | sed 's/^"\(.*\)"$/\1/')
 	org=$(echo "$response" | sed -e 's/[{}]/''/g' | awk -v RS=',"' -F: '/^org/ {print $2}' | sed 's/^"\(.*\)"$/\1/')
 	as=$(echo "$response" | sed -e 's/[{}]/''/g' | awk -v RS=',"' -F: '/^as/ {print $2}' | sed 's/^"\(.*\)"$/\1/')
-	
+
 	echo
 	echo "$net_type Network Information:"
 	echo "---------------------------------"
@@ -323,7 +335,7 @@ function ip_info() {
 	fi
 	if [[ -n "$country" ]]; then
 		echo "Country    : $country"
-	fi 
+	fi
 
 	[[ -n $JSON ]] && JSON_RESULT+=',"ip_info":{"protocol":"'$net_type'","isp":"'$isp'","asn":"'$as'","org":"'$org'","city":"'$city'","region":"'$region'","region_code":"'$region_code'","country":"'$country'"}'
 }
@@ -357,7 +369,7 @@ rm "$DATE.test"
 mkdir -p "$YABS_PATH"
 
 # trap CTRL+C signals to exit script cleanly
-# trap catch_abort INT
+trap catch_abort INT
 
 # catch_abort
 # Purpose: This method will catch CTRL+C signals in order to exit the script cleanly and remove
@@ -482,7 +494,7 @@ function disk_test {
 
 # dd_test
 # Purpose: This method is invoked if the fio disk test failed. dd sequential speed tests are
-#          not indiciative or real-world results, however, some form of disk speed measure 
+#          not indiciative or real-world results, however, some form of disk speed measure
 #          is better than nothing.
 # Parameters:
 #          - (none)
@@ -527,53 +539,98 @@ elif [[ -z "$SKIP_FIO" && "$AVAIL_SPACE" -lt 524288 && ("$ARCH" = "aarch64" || "
 elif [ -z "$SKIP_FIO" ]; then
 	# Perform ZFS filesystem detection and determine if we have enough free space according to spa_asize_inflation
 	ZFSCHECK="/sys/module/zfs/parameters/spa_asize_inflation"
-	if [[ -f "$ZFSCHECK" ]];then
-		mul_spa=$(( $(cat /sys/module/zfs/parameters/spa_asize_inflation) * 2 ))
-		warning=0
-		poss=()
+	if [[ -f "$ZFSCHECK" ]]; then
+    # Calculate mul_spa, which is assumed to be an integer (e.g., 2 * 2 = 4)
+    mul_spa=$(( $(cat /sys/module/zfs/parameters/spa_asize_inflation) * 2 ))
+    warning=0
+    poss=()
 
-		for pathls in $(df -Th | awk '{print $7}' | tail -n +2)
-		do
-			if [[ "${PWD##"$pathls"}" != "$PWD" ]]; then
-				poss+=("$pathls")
-			fi
-		done
+    # Find relevant filesystem paths that are parent directories or the current directory itself
+    for pathls in $(df -Th | awk '{print $7}' | tail -n +2)
+    do
+        # Check if PWD starts with (is a subdirectory of or same as) pathls
+        if [[ "${PWD}" == "${pathls}"* ]]; then
+            poss+=("$pathls")
+        fi
+    done
 
-		long=""
-		m=-1
-		for x in "${poss[@]}"
-		do
-			if [ "${#x}" -gt "$m" ];then
-				m=${#x}
-				long=$x
-			fi
-		done
+    long=""
+    m=-1 # Initialize max length to -1 to ensure the first valid path is picked
+    # Select the longest matching path from the 'poss' array
+    # This ensures we get the most specific mounted point for the current directory
+    for x in "${poss[@]}"
+    do
+        if [ "${#x}" -gt "$m" ];then
+            m=${#x}
+            long=$x
+        fi
+    done
 
-		size_b=$(df -Th | grep -w "$long" | grep -i zfs | awk '{print $5}' | tail -c -2 | head -c 1)
-		free_space=$(df -Th | grep -w "$long" | grep -i zfs | awk '{print $5}' | head -c -2)
+    # Proceed only if a relevant ZFS path was found
+    if [[ -n "$long" ]]; then
+        # Get the 'Avail' space directly for the detected path and explicitly for ZFS type
+        # The 'Avail' column is the 4th field in `df -Th` output
+        # Example: '7.3T', '104G', '17G'
+        avail_space_with_unit=$(df -Th | grep -w "$long" | awk '$2 == "zfs" {print $4; exit}')
 
-		if [[ $size_b == 'T' ]]; then
-			free_space=$(awk "BEGIN {print int($free_space * 1024)}")
-			size_b='G'
-		fi
+        # If a valid free space value was extracted
+        if [[ -n "$avail_space_with_unit" ]]; then
+            # Use awk to parse the numeric part and unit, then convert to Gigabytes (integer)
+            # This handles units like T, G, M, K, or empty (assumed bytes) and rounds to nearest integer
+            free_space_gb_int=$(echo "$avail_space_with_unit" | awk '
+            {
+                # Extract numeric part and unit
+                numeric_part = $0;
+                unit = "";
+                # Use match to find the number and an optional unit at the end
+                if (match($0, /([0-9.]+)([KMGTB]?)$/)) {
+                    numeric_part = substr($0, RSTART, RLENGTH - length(substr($0, RSTART + RLENGTH - 1, 1)));
+                    unit = substr($0, RSTART + RLENGTH - 1, 1);
+                    # If the last character was part of the number (e.g., "1.2"), unit should be empty
+                    if (unit ~ /[0-9.]/) {
+                        unit = "";
+                    }
+                }
 
-		if [[ $(df -Th | grep -w "$long") == *"zfs"* ]];then
+                # Convert unit to uppercase for consistent logic
+                unit = toupper(unit);
 
-			if [[ $size_b == 'G' ]]; then
-				if ((free_space < mul_spa)); then
-					warning=1
-				fi
-			else
-				warning=1
-			fi
+                converted_value_gb = 0;
+                if (unit == "T") {
+                    converted_value_gb = numeric_part * 1024;
+                } else if (unit == "G") {
+                    converted_value_gb = numeric_part;
+                } else if (unit == "M") {
+                    converted_value_gb = numeric_part / 1024;
+                } else if (unit == "K") {
+                    converted_value_gb = numeric_part / (1024 * 1024);
+                } else if (unit == "B" || unit == "") { # Assume bytes if unit is B or empty
+                    converted_value_gb = numeric_part / (1024 * 1024 * 1024);
+                }
 
-		fi
+                # Print rounded to nearest integer
+                printf "%.0f\n", converted_value_gb;
+            }')
 
-		if [[ $warning -eq 1 ]];then
-			echo -en "\nWarning! You are running YABS on a ZFS Filesystem and your disk space is too low for the fio test. Your test results will be inaccurate. You need at least $mul_spa GB free in order to complete this test accurately. For more information, please see https://github.com/masonr/yet-another-bench-script/issues/13\n"
-		fi
-	fi
-	
+            # Now, perform the arithmetic comparison with the integer free_space_gb_int
+            if ((free_space_gb_int < mul_spa)); then
+                warning=1
+            fi
+        else
+            # Handle case where avail_space_with_unit doesn't match expected format
+            echo "Warning: Could not parse free space format for $long: '$avail_space_with_unit'"
+            # Potentially set warning=1 here if unparseable space is critical
+        fi
+    else
+        echo "Note: No relevant filesystem path detected for current directory ($PWD)."
+    fi
+
+    # Display warning if conditions are met
+    if [[ $warning -eq 1 ]];then
+        echo -en "\nWarning! You are running YABS on a ZFS Filesystem and your disk space is too low for the fio test. Your test results will be inaccurate. You need at least $mul_spa GB free in order to complete this test accurately. For more information, please see https://github.com/masonr/yet-another-bench-script/issues/13\n"
+    fi
+fi
+
 	echo -en "\nPreparing system for disk tests..."
 
 	# create temp directory to store disk write/read test files
@@ -639,8 +696,8 @@ elif [ -z "$SKIP_FIO" ]; then
 		echo -e "---------------------------------"
 		printf "%-6s | %-6s %-4s | %-6s %-4s | %-6s %-4s | %-6s %-4s\n" "" "Test 1" "" "Test 2" ""  "Test 3" "" "Avg" ""
 		printf "%-6s | %-6s %-4s | %-6s %-4s | %-6s %-4s | %-6s %-4s\n" "" "" "" "" "" "" "" "" ""
-		printf "%-6s | %-11s | %-11s | %-11s | %-6.2f %-4s\n" "Write" "${DISK_WRITE_TEST_RES[0]}" "${DISK_WRITE_TEST_RES[1]}" "${DISK_WRITE_TEST_RES[2]}" "${DISK_WRITE_TEST_AVG}" "${DISK_WRITE_TEST_UNIT}" 
-		printf "%-6s | %-11s | %-11s | %-11s | %-6.2f %-4s\n" "Read" "${DISK_READ_TEST_RES[0]}" "${DISK_READ_TEST_RES[1]}" "${DISK_READ_TEST_RES[2]}" "${DISK_READ_TEST_AVG}" "${DISK_READ_TEST_UNIT}" 
+		printf "%-6s | %-11s | %-11s | %-11s | %-6.2f %-4s\n" "Write" "${DISK_WRITE_TEST_RES[0]}" "${DISK_WRITE_TEST_RES[1]}" "${DISK_WRITE_TEST_RES[2]}" "${DISK_WRITE_TEST_AVG}" "${DISK_WRITE_TEST_UNIT}"
+		printf "%-6s | %-11s | %-11s | %-11s | %-6.2f %-4s\n" "Read" "${DISK_READ_TEST_RES[0]}" "${DISK_READ_TEST_RES[1]}" "${DISK_READ_TEST_RES[2]}" "${DISK_READ_TEST_AVG}" "${DISK_READ_TEST_UNIT}"
 	else # fio tests completed successfully, print results
 		CURRENT_PARTITION=$(df -P . 2>/dev/null | tail -1 | cut -d' ' -f 1)
 		[[ -n $JSON ]] && JSON_RESULT+=',"partition":"'$CURRENT_PARTITION'","fio":['
@@ -674,7 +731,7 @@ fi
 
 # iperf_test
 # Purpose: This method is designed to test the network performance of the host by executing an
-#          iperf3 test to/from the public iperf server passed to the function. Both directions 
+#          iperf3 test to/from the public iperf server passed to the function. Both directions
 #          (send and receive) are tested.
 # Parameters:
 #          1. URL - URL/domain name of the iperf server
@@ -686,7 +743,7 @@ function iperf_test {
 	PORTS=$2
 	HOST=$3
 	FLAGS=$4
-	
+
 	# attempt the iperf send test 3 times, allowing for a slot to become available on the
 	#   server or to throw out any bad/error results
 	I=1
@@ -739,9 +796,9 @@ function iperf_test {
 		fi
 		echo -en "\r\033[0K"
 	done
-	
+
 	# Run a latency test via ping -c1 command -> will return "xx.x ms"
-	[[ -n $LOCAL_PING ]] && LATENCY_RUN="$(ping -c1 "$URL" 2>/dev/null | grep -o 'time=.*' | sed s/'time='//)" 
+	[[ -n $LOCAL_PING ]] && LATENCY_RUN="$(ping -c1 "$URL" 2>/dev/null | grep -o 'time=.*' | sed s/'time='//)"
 	[[ -z $LATENCY_RUN ]] && LATENCY_RUN="--"
 
 	# parse the resulting send and receive speed results
@@ -765,7 +822,7 @@ function launch_iperf {
 	echo -e "---------------------------------"
 	printf "%-15s | %-25s | %-15s | %-15s | %-15s\n" "Provider" "Location (Link)" "Send Speed" "Recv Speed" "Ping"
 	printf "%-15s | %-25s | %-15s | %-15s | %-15s\n" "-----" "-----" "----" "----" "----"
-	
+
 	# loop through iperf locations array to run iperf test using each public iperf server
 	for (( i = 0; i < IPERF_LOCS_NUM; i++ )); do
 		# test if the current iperf location supports the network mode being tested (IPv4/IPv6)
@@ -815,7 +872,7 @@ if [ -z "$SKIP_IPERF" ]; then
 			IPERF_CMD=$IPERF_PATH/iperf3
 		fi
 	fi
-	
+
 	# array containing all currently available iperf3 public servers to use for the network test
 	# format: "1" "2" "3" "4" "5" \
 	#   1. domain name of the iperf server
@@ -844,11 +901,29 @@ if [ -z "$SKIP_IPERF" ]; then
 			"speedtest.nyc1.us.leaseweb.net" "5201-5210" "Leaseweb" "NYC, NY, US (10G)" "IPv4|IPv6" \
 		)
 	fi
-	
+
+	# if custom iperf servers are provided, use them instead of the default servers
+	if [ -n "$IPERF_SERVERS" ]; then
+		# clear the default iperf locations array
+		IPERF_LOCS=()
+
+		# parse the custom iperf servers and add them to the array
+		IFS=',' read -ra CUSTOM_SERVERS <<< "$IPERF_SERVERS"
+		for server in "${CUSTOM_SERVERS[@]}"; do
+			# parse server definition: host:port_range:name:location:network_modes
+			IFS=':' read -ra SERVER_PARTS <<< "$server"
+			if [ ${#SERVER_PARTS[@]} -eq 5 ]; then
+				IPERF_LOCS+=("${SERVER_PARTS[0]}" "${SERVER_PARTS[1]}" "${SERVER_PARTS[2]}" "${SERVER_PARTS[3]}" "${SERVER_PARTS[4]}")
+			else
+				echo -e "Invalid server format: $server (expected format: host:port_range:name:location:network_modes)"
+			fi
+		done
+	fi
+
 	# get the total number of iperf locations (total array size divided by 5 since each location has 5 elements)
 	IPERF_LOCS_NUM=${#IPERF_LOCS[@]}
 	IPERF_LOCS_NUM=$((IPERF_LOCS_NUM / 5))
-	
+
 	if [ -z "$IPERF_DL_FAIL" ]; then
 		[[ -n $JSON ]] && JSON_RESULT+=',"iperf":['
 		# check if the host has IPv4 connectivity, if so, run iperf3 IPv4 tests
@@ -862,7 +937,7 @@ if [ -z "$SKIP_IPERF" ]; then
 fi
 
 # launch_geekbench
-# Purpose: This method is designed to run the Primate Labs' Geekbench 4/5 Cross-Platform Benchmark utility
+# Purpose: This method is designed to run the Primate Labs' Geekbench 4/5/6 Cross-Platform Benchmark utility
 # Parameters:
 #          1. VERSION - indicates which Geekbench version to run
 function launch_geekbench {
@@ -897,8 +972,8 @@ function launch_geekbench {
 					|| GB_URL="https://cdn.geekbench.com/Geekbench-5.5.1-Linux.tar.gz"
 				GB_CMD="geekbench5"
 			else # Geekbench v6
-				[[ $ARCH = *aarch64* || $ARCH = *arm* ]] && GB_URL="https://cdn.geekbench.com/Geekbench-6.3.0-LinuxARMPreview.tar.gz" \
-					|| GB_URL="https://cdn.geekbench.com/Geekbench-6.3.0-Linux.tar.gz"
+				[[ $ARCH = *aarch64* || $ARCH = *arm* ]] && GB_URL="https://cdn.geekbench.com/Geekbench-6.4.0-LinuxARMPreview.tar.gz" \
+					|| GB_URL="https://cdn.geekbench.com/Geekbench-6.4.0-Linux.tar.gz"
 				GB_CMD="geekbench6"
 			fi
 			GB_RUN="True"
@@ -931,7 +1006,7 @@ function launch_geekbench {
 			if [[ -z "$IPV4_CHECK" ]]; then
 				# Geekbench test failed to download because host lacks IPv4 (cdn.geekbench.com = IPv4 only)
 				echo -e "\r\033[0KGeekbench releases can only be downloaded over IPv4. FTP the Geekbench files and run manually."
-			elif [[ $VERSION != *4* && $RAM_PLUS_SWAP -le 1048576 ]]; then
+			elif [[ $VERSION != *4* && $TOTAL_RAM_RAW -le 1048576 ]]; then
 				# Geekbench 5/6 test failed with low memory (<=1GB)
 				echo -e "\r\033[0KGeekbench test failed and low memory was detected. Add at least 1GB of SWAP or use GB4 instead (higher compatibility with low memory systems)."
 			elif [[ $ARCH != *x86* ]]; then
@@ -947,10 +1022,10 @@ function launch_geekbench {
 			# parse the public results page for the single and multi core geekbench scores
 			[[ $VERSION == *4* ]] && GEEKBENCH_SCORES=$($DL_CMD "$GEEKBENCH_URL" | grep "span class='score'") || \
 				GEEKBENCH_SCORES=$($DL_CMD "$GEEKBENCH_URL" | grep "div class='score'")
-				
+
 			GEEKBENCH_SCORES_SINGLE=$(echo "$GEEKBENCH_SCORES" | awk -v FS="(>|<)" '{ print $3 }' | head -n 1)
 			GEEKBENCH_SCORES_MULTI=$(echo "$GEEKBENCH_SCORES" | awk -v FS="(>|<)" '{ print $3 }' | tail -n 1)
-		
+
 			# print the Geekbench results
 			echo -en "\r\033[0K"
 			echo -e "Geekbench $VERSION Benchmark Test:"
@@ -1016,7 +1091,7 @@ function calculate_time_taken() {
 	[[ -n $JSON ]] && JSON_RESULT+=",\"runtime\":{\"start\":$start_time,\"end\":$end_time,\"elapsed\":$time_taken}"
 }
 
-# calculate_time_taken "$YABS_END_TIME" "$YABS_START_TIME"
+calculate_time_taken "$YABS_END_TIME" "$YABS_START_TIME"
 
 if [[ -n $JSON ]]; then
 	JSON_RESULT+="}"
