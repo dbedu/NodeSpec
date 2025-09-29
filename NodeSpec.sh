@@ -203,7 +203,7 @@ function run_net_trace(){
 }
 
 # ==================================================================
-# FINALIZED FUNCTION V2: Perform all parsing inside the chroot
+# FINALIZED FUNCTION V3: Robust parsing and graceful failure
 # ==================================================================
 function generate_final_report(){
     _green_bold "\n========== Generating Final Report =========="
@@ -228,16 +228,21 @@ function generate_final_report(){
     echo "### NodeSpec v${SCRIPT_VERSION} Report" >> "$md_report_path"
     echo "**Test Time:** $test_time" >> "$md_report_path"
 
-    # --- System Information ---
+    # --- System Information, Geekbench, and FIO (from YABS) ---
     if chroot_run [ -f "$yabs_json_chroot" ]; then
+        # --- System Info ---
         local sys_info_txt=$(chroot_run "jq -r '
             \"OS         : \\(.os.distro) (\\(.os.arch))\",
             \"Kernel     : \\(.os.kernel)\",
             \"CPU Model  : \\(.cpu.model) (\\(.cpu.cores) Cores)\",
-            \"RAM        : \\(.mem.ram / 1024 | floor) MiB\",
-            \"Swap       : \\(.mem.swap / 1024 | floor) MiB\",
-            \"Disk       : \\(.mem.disk / 1024 / 1024 | tonumber | sprintf(\"%.1f GiB\"))\"
-        ' $yabs_json_chroot")
+            \"RAM        : \\(.mem.ram)\",
+            \"Swap       : \\(.mem.swap)\",
+            \"Disk       : \\(.mem.disk)\"
+        ' $yabs_json_chroot" | awk -F ':[[:space:]]*' '{
+            if ($1 == "RAM" || $1 == "Swap") printf "%-12s: %.0f MiB\n", $1, $2/1024;
+            else if ($1 == "Disk") printf "%-12s: %.1f GiB\n", $1, $2/1024/1024;
+            else printf "%-12s: %s\n", $1, $2;
+        }')
         
         echo -e "\n--- System Information ---" | tee -a "$text_report_path"
         echo "$sys_info_txt" | tee -a "$text_report_path"
@@ -248,39 +253,36 @@ function generate_final_report(){
             echo "|:---|:---|"
             echo "$sys_info_txt" | awk -F ':[[:space:]]*' '{printf "| **%s** | %s |\n", $1, $2}'
         } >> "$md_report_path"
-    fi
-
-    # --- Geekbench ---
-    if chroot_run [ -f "$yabs_json_chroot" ] && [[ $(chroot_run "jq -r '.geekbench[0].version // \"N/A\"' $yabs_json_chroot") != "N/A" ]]; then
-        local gb_info_txt=$(chroot_run "jq -r '
-            .geekbench[0] |
-            \"Single-Core : \\(.single)\",
-            \"Multi-Core  : \\(.multi)\",
-            \"Full Report : \\(.url)\"
-        ' $yabs_json_chroot")
-        local gb_version=$(chroot_run "jq -r '.geekbench[0].version' $yabs_json_chroot")
         
-        echo -e "\n--- Geekbench v${gb_version} CPU Benchmark ---" | tee -a "$text_report_path"
-        echo "$gb_info_txt" | tee -a "$text_report_path"
+        # --- Geekbench ---
+        if [[ $(chroot_run "jq -r '.geekbench[0].version // \"N/A\"' $yabs_json_chroot") != "N/A" ]]; then
+            local gb_version=$(chroot_run "jq -r '.geekbench[0].version' $yabs_json_chroot")
+            local gb_info_txt=$(chroot_run "jq -r '.geekbench[0] | \"Single-Core : \\(.single)\", \"Multi-Core  : \\(.multi)\", \"Full Report : \\(.url)\"' $yabs_json_chroot")
+            
+            echo -e "\n--- Geekbench v${gb_version} CPU Benchmark ---" | tee -a "$text_report_path"
+            echo "$gb_info_txt" | tee -a "$text_report_path"
 
-        {
-            local gb_url=$(echo "$gb_info_txt" | awk '/Full Report/ {print $3}')
-            echo -e "\n### Geekbench v${gb_version} CPU Benchmark\n"
-            echo "| Test | Score |"
-            echo "|:---|:---|"
-            echo "$gb_info_txt" | awk -F ':[[:space:]]*' -v url="$gb_url" '{ if ($1 == "Full Report") {printf "| **%s** | [View Online](%s) |\n", $1, url} else {printf "| **%s** | %s |\n", $1, $2} }'
-        } >> "$md_report_path"
-    fi
+            {
+                local gb_url=$(echo "$gb_info_txt" | awk '/Full Report/ {print $3}')
+                echo -e "\n### Geekbench v${gb_version} CPU Benchmark\n"
+                echo "| Test | Score |"
+                echo "|:---|:---|"
+                echo "$gb_info_txt" | awk -F ':[[:space:]]*' -v url="$gb_url" '{ if ($1 == "Full Report") {printf "| **%s** | [View Online](%s) |\n", $1, url} else {printf "| **%s** | %s |\n", $1, $2} }'
+            } >> "$md_report_path"
+        fi
 
-    # --- FIO Disk I/O ---
-    if chroot_run [ -f "$yabs_json_chroot" ]; then
+        # --- FIO Disk I/O ---
         local fio_header_txt=$(printf "%-12s | %-20s | %-20s | %-20s\n" "Block Size" "Read" "Write" "Total"; printf -- '-%.0s' {1..70} && echo "")
-        local fio_header_md=$(echo -e "\n### FIO Disk I/O Benchmark (Mixed R/W)\n\n| Block Size | Read | Write | Total |\n|:---|:---|:---|:---|")
+        local fio_header_md=$(echo -e "\n### FIO Disk I/O Benchmark (Mixed R/W)\n\n| Block Size | Read | Write | Total |\n|:---|:---|:---|:---|" )
 
-        local fio_body=$(chroot_run "jq -r '
-            .fio[] |
-            @text \"\\(.bs) | \\(.speed_r/1000 | tonumber | sprintf(\"%.2f MB/s\")) (\\(.iops_r) IOPS) | \\(.speed_w/1000 | tonumber | sprintf(\"%.2f MB/s\")) (\\(.iops_w) IOPS) | \\(.speed_rw/1000 | tonumber | sprintf(\"%.2f MB/s\")) (\\(.iops_rw) IOPS)\"
-        ' $yabs_json_chroot" | awk -F '|' '{printf "%-12s | %-20s | %-20s | %-20s\n", $1, $2, $3, $4}')
+        # FIX: Replaced sprintf with awk for universal compatibility
+        local fio_body=$(chroot_run "jq -r '.fio[] | \"\(.bs) | \(.speed_r) \(.iops_r) | \(.speed_w) \(.iops_w) | \(.speed_rw) \(.iops_rw)\"' $yabs_json_chroot" | awk -F '|' '{
+            r_s=$2; r_i=$3; w_s=$4; w_i=$5; t_s=$6; t_i=$7;
+            r_f=sprintf("%.2f MB/s (%s IOPS)", r_s/1000, r_i);
+            w_f=sprintf("%.2f MB/s (%s IOPS)", w_s/1000, w_i);
+            t_f=sprintf("%.2f MB/s (%s IOPS)", t_s/1000, t_i);
+            printf "%-12s | %-20s | %-20s | %-20s\n", $1, r_f, w_f, t_f;
+        }')
 
         echo -e "\n--- FIO Disk I/O Benchmark (Mixed R/W) ---" | tee -a "$text_report_path"
         echo "$fio_header_txt" | tee -a "$text_report_path"
@@ -291,9 +293,9 @@ function generate_final_report(){
     fi
 
     # --- IP Quality ---
-    if chroot_run [ -f "$ip_json_chroot" ]; then
+    # FIX: Add a check to see if the test was successful before parsing
+    if chroot_run "jq -e '.ip' $ip_json_chroot >/dev/null 2>&1"; then
         local ip_info_txt=$(chroot_run "jq -r '
-            . |
             \"IP Address : \\(.ip)\",
             \"Location   : \\(.city), \\(.region), \\(.country)\",
             \"ASN        : \\(.asn)\",
@@ -310,17 +312,18 @@ function generate_final_report(){
             echo "|:---|:---|"
             echo "$ip_info_txt" | awk -F ':[[:space:]]*' '{printf "| **%s** | %s |\n", $1, $2}'
         } >> "$md_report_path"
+    else
+        echo -e "\n--- IP Quality & Geolocation ---\nTest failed or data not available." | tee -a "$text_report_path"
+        echo -e "\n### IP Quality & Geolocation\n\nTest failed or data not available." >> "$md_report_path"
     fi
     
     # --- Network Performance ---
-    if chroot_run [ -f "$net_json_chroot" ]; then
+    # FIX: Add a check to see if the test was successful before parsing
+    if chroot_run "jq -e '(.speedtest | length) > 0' $net_json_chroot >/dev/null 2>&1"; then
         local net_header_txt=$(printf "%-28s | %-18s | %-18s\n" "Node Location" "Upload Speed" "Download Speed"; printf -- '-%.0s' {1..70} && echo "")
-        local net_header_md=$(echo -e "\n### Network Performance (iperf3)\n\n| Node Location | Upload Speed | Download Speed |\n|:---|:---|:---|")
+        local net_header_md=$(echo -e "\n### Network Performance (iperf3)\n\n| Node Location | Upload Speed | Download Speed |\n|:---|:---|:---|" )
         
-        local net_body=$(chroot_run "jq -r '
-            .speedtest[] |
-            \"\\(.name) | \\(.upload.speed_formatted) | \\(.download.speed_formatted)\"
-        ' $net_json_chroot" | awk -F '|' '{printf "%-28s | %-18s | %-18s\n", $1, $2, $3}')
+        local net_body=$(chroot_run "jq -r '.speedtest[] | \"\\(.name) | \\(.upload.speed_formatted) | \\(.download.speed_formatted)\"' $net_json_chroot" | awk -F '|' '{printf "%-28s | %-18s | %-18s\n", $1, $2, $3}')
 
         echo -e "\n--- Network Performance (iperf3) ---" | tee -a "$text_report_path"
         echo "$net_header_txt" | tee -a "$text_report_path"
@@ -328,20 +331,25 @@ function generate_final_report(){
 
         echo "$net_header_md" >> "$md_report_path"
         echo "$net_body" | awk -F '|' '{printf "| %s | %s | %s |\n", $1, $2, $3}' >> "$md_report_path"
+    else
+        echo -e "\n--- Network Performance (iperf3) ---\nTest failed or data not available." | tee -a "$text_report_path"
+        echo -e "\n### Network Performance (iperf3)\n\nTest failed or data not available." >> "$md_report_path"
     fi
 
     # --- Backroute Trace ---
     if chroot_run [ -f "$trace_log_chroot" ]; then
         local trace_body=$(chroot_run "awk '/Backroute Trace/,/=====/' $trace_log_chroot")
-        echo -e "\n--- Backroute Trace ---" | tee -a "$text_report_path"
-        echo "$trace_body" | tee -a "$text_report_path"
+        if [[ -n "$trace_body" ]]; then
+            echo -e "\n--- Backroute Trace ---" | tee -a "$text_report_path"
+            echo "$trace_body" | tee -a "$text_report_path"
 
-        {
-            echo -e "\n### Backroute Trace\n"
-            echo '```text'
-            echo "$trace_body"
-            echo '```'
-        } >> "$md_report_path"
+            {
+                echo -e "\n### Backroute Trace\n"
+                echo '```text'
+                echo "$trace_body"
+                echo '```'
+            } >> "$md_report_path"
+        fi
     fi
 
     # Final Display
@@ -356,6 +364,7 @@ function generate_final_report(){
     _blue "A beautiful Markdown version has been saved to:"
     _yellow "$md_report_path"
 }
+
 function post_cleanup(){
     echo ""
     read -p "Press [Enter] key to finish and clean up all temporary files..."
