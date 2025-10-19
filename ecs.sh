@@ -275,11 +275,55 @@ global_startup_init_action() {
     echo -e "${Msg_Info}Starting Test ..."
 }
 
+# Generate NodeSpec Performance Report
+generate_nodespec_report() {
+    cd "$myvar" >/dev/null 2>&1
+
+    # Check if test_result.txt exists
+    if [ ! -f "test_result.txt" ]; then
+        if [ "$en_status" = true ]; then
+            echo "Warning: test_result.txt not found, skipping NodeSpec report generation"
+        else
+            echo "警告: test_result.txt 未找到，跳过 NodeSpec 报告生成"
+        fi
+        return
+    fi
+
+    # Download and execute the NodeSpec parser script from api.nodespec.com
+    if [ "$en_status" = true ]; then
+        _blue "-> Generating NodeSpec Performance Report..."
+    else
+        _blue "-> 正在生成 NodeSpec 性能报告..."
+    fi
+
+    # Try to download and execute the parser
+    if curl -sL -m 30 "https://api.nodespec.com/nodespec-parser.sh" -o nodespec-parser.sh 2>/dev/null; then
+        chmod +x nodespec-parser.sh
+        bash nodespec-parser.sh test_result.txt
+        rm -f nodespec-parser.sh
+    else
+        # Fallback: try http if https fails
+        if curl -sL -m 30 "http://api.nodespec.com/nodespec-parser.sh" -o nodespec-parser.sh 2>/dev/null; then
+            chmod +x nodespec-parser.sh
+            bash nodespec-parser.sh test_result.txt
+            rm -f nodespec-parser.sh
+        else
+            if [ "$en_status" = true ]; then
+                _yellow "Warning: Failed to download NodeSpec parser, skipping report generation"
+            else
+                _yellow "警告: 无法下载 NodeSpec 解析器，跳过报告生成"
+            fi
+        fi
+    fi
+}
+
 global_exit_action() {
     reset_default_sysctl >/dev/null 2>&1
     echo -en "$SHOW_CURSOR"
     if [ "$build_text_status" = true ]; then
         build_text
+        # Generate NodeSpec report after building text
+        generate_nodespec_report
         if [ -n "$https_short_url" ] || [ -n "$http_short_url" ]; then
             if [ "$en_status" = true ]; then
                 _green "  ShortLink:"
