@@ -124,13 +124,37 @@ parse_network_test() {
     NETWORK_INFO[speedtest_download]=$(grep "Speedtest.net" "$input_file" | grep -oP "[0-9]+\.[0-9]+Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
     NETWORK_INFO[speedtest_latency]=$(grep "Speedtest.net" "$input_file" | grep -oP "[0-9]+\.[0-9]+ms" | grep -oP "[0-9]+\.[0-9]+")
 
-    # Parse other test locations (store first 3 non-Speedtest.net results)
-    local test_locations=$(grep -E "洛杉矶|日本|联通|电信|移动|Los Angeles|Tokyo|China" "$input_file" | head -3)
-    if [ -n "$test_locations" ]; then
+    # Parse Los Angeles test results
+    NETWORK_INFO[la_upload]=$(grep "洛杉矶\|Los Angeles" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[la_download]=$(grep "洛杉矶\|Los Angeles" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[la_latency]=$(grep "洛杉矶\|Los Angeles" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*ms" | grep -oP "[0-9]+\.[0-9]+")
+
+    # Parse Tokyo test results
+    NETWORK_INFO[tokyo_upload]=$(grep "日本东京\|Tokyo\|Japan" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[tokyo_download]=$(grep "日本东京\|Tokyo\|Japan" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[tokyo_latency]=$(grep "日本东京\|Tokyo\|Japan" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*ms" | grep -oP "[0-9]+\.[0-9]+")
+
+    # Parse China Unicom (联通) test results
+    NETWORK_INFO[unicom_upload]=$(grep "联通\|Unicom" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[unicom_download]=$(grep "联通\|Unicom" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[unicom_latency]=$(grep "联通\|Unicom" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*ms" | grep -oP "[0-9]+\.[0-9]+")
+
+    # Parse China Telecom (电信) test results
+    NETWORK_INFO[telecom_upload]=$(grep "电信\|Telecom" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[telecom_download]=$(grep "电信\|Telecom" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[telecom_latency]=$(grep "电信\|Telecom" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*ms" | grep -oP "[0-9]+\.[0-9]+")
+
+    # Parse China Mobile (移动) test results
+    NETWORK_INFO[mobile_upload]=$(grep "移动\|Mobile" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[mobile_download]=$(grep "移动\|Mobile" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[mobile_latency]=$(grep "移动\|Mobile" "$input_file" | grep -oP "[0-9]+\.[0-9]+\s*ms" | grep -oP "[0-9]+\.[0-9]+")
+
+    # Check if we have at least one additional test
+    NETWORK_INFO[has_other_tests]="false"
+    if [ -n "${NETWORK_INFO[la_upload]}" ] || [ -n "${NETWORK_INFO[tokyo_upload]}" ] || \
+       [ -n "${NETWORK_INFO[unicom_upload]}" ] || [ -n "${NETWORK_INFO[telecom_upload]}" ] || \
+       [ -n "${NETWORK_INFO[mobile_upload]}" ]; then
         NETWORK_INFO[has_other_tests]="true"
-        NETWORK_INFO[other_tests]="$test_locations"
-    else
-        NETWORK_INFO[has_other_tests]="false"
     fi
 }
 
@@ -515,8 +539,80 @@ EOF
 
     # Network section (optional)
     if [ -n "${NETWORK_INFO[speedtest_upload]}" ]; then
-        local network_section="### 网络速度测试\n\n#### Speedtest.net 测试结果\n- **上传速度**: ${NETWORK_INFO[speedtest_upload]:-N/A} Mbps\n- **下载速度**: ${NETWORK_INFO[speedtest_download]:-N/A} Mbps\n- **延迟**: ${NETWORK_INFO[speedtest_latency]:-N/A} ms\n"
-        perl -i -pe "s|{{NETWORK_SECTION}}|$network_section|g" "$report_file" 2>/dev/null || sed -i "/{{NETWORK_SECTION}}/d" "$report_file"
+        cat > /tmp/network_section.txt << EOF
+### 网络速度测试
+
+#### Speedtest.net 测试结果
+- **上传速度**: ${NETWORK_INFO[speedtest_upload]:-N/A} Mbps
+- **下载速度**: ${NETWORK_INFO[speedtest_download]:-N/A} Mbps
+- **延迟**: ${NETWORK_INFO[speedtest_latency]:-N/A} ms
+EOF
+
+        # Add Los Angeles results if available
+        if [ -n "${NETWORK_INFO[la_upload]}" ]; then
+            cat >> /tmp/network_section.txt << EOF
+
+#### 洛杉矶节点测试
+- **上传速度**: ${NETWORK_INFO[la_upload]:-N/A} Mbps
+- **下载速度**: ${NETWORK_INFO[la_download]:-N/A} Mbps
+- **延迟**: ${NETWORK_INFO[la_latency]:-N/A} ms
+EOF
+        fi
+
+        # Add Tokyo results if available
+        if [ -n "${NETWORK_INFO[tokyo_upload]}" ]; then
+            cat >> /tmp/network_section.txt << EOF
+
+#### 日本东京节点测试
+- **上传速度**: ${NETWORK_INFO[tokyo_upload]:-N/A} Mbps
+- **下载速度**: ${NETWORK_INFO[tokyo_download]:-N/A} Mbps
+- **延迟**: ${NETWORK_INFO[tokyo_latency]:-N/A} ms
+EOF
+        fi
+
+        # Add China Unicom results if available
+        if [ -n "${NETWORK_INFO[unicom_upload]}" ]; then
+            cat >> /tmp/network_section.txt << EOF
+
+#### 联通节点测试
+- **上传速度**: ${NETWORK_INFO[unicom_upload]:-N/A} Mbps
+- **下载速度**: ${NETWORK_INFO[unicom_download]:-N/A} Mbps
+- **延迟**: ${NETWORK_INFO[unicom_latency]:-N/A} ms
+EOF
+        fi
+
+        # Add China Telecom results if available
+        if [ -n "${NETWORK_INFO[telecom_upload]}" ]; then
+            cat >> /tmp/network_section.txt << EOF
+
+#### 电信节点测试
+- **上传速度**: ${NETWORK_INFO[telecom_upload]:-N/A} Mbps
+- **下载速度**: ${NETWORK_INFO[telecom_download]:-N/A} Mbps
+- **延迟**: ${NETWORK_INFO[telecom_latency]:-N/A} ms
+EOF
+        fi
+
+        # Add China Mobile results if available
+        if [ -n "${NETWORK_INFO[mobile_upload]}" ]; then
+            cat >> /tmp/network_section.txt << EOF
+
+#### 移动节点测试
+- **上传速度**: ${NETWORK_INFO[mobile_upload]:-N/A} Mbps
+- **下载速度**: ${NETWORK_INFO[mobile_download]:-N/A} Mbps
+- **延迟**: ${NETWORK_INFO[mobile_latency]:-N/A} ms
+EOF
+        fi
+
+        # Insert the network section into the report
+        awk '
+            /{{NETWORK_SECTION}}/ {
+                system("cat /tmp/network_section.txt")
+                next
+            }
+            { print }
+        ' "$report_file" > "$report_file.tmp"
+        mv "$report_file.tmp" "$report_file"
+        rm -f /tmp/network_section.txt
     else
         sed -i "/{{NETWORK_SECTION}}/d" "$report_file"
     fi
