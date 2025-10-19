@@ -112,6 +112,24 @@ parse_disk_test() {
     DISK_INFO[1m_read]=$(grep -E "1M Block|1GB-1M" "$input_file" | grep -oP "[0-9]+(\.[0-9]+)? [MG]B/s" | tail -1 | grep -oP "[0-9]+(\.[0-9]+)?")
 }
 
+# Parse network speedtest results
+parse_network_test() {
+    local input_file="$1"
+
+    # Parse Speedtest.net results
+    NETWORK_INFO[speedtest_upload]=$(grep "Speedtest.net" "$input_file" | grep -oP "[0-9]+\.[0-9]+Mbps" | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[speedtest_download]=$(grep "Speedtest.net" "$input_file" | grep -oP "[0-9]+\.[0-9]+Mbps" | sed -n '2p' | grep -oP "[0-9]+\.[0-9]+")
+    NETWORK_INFO[speedtest_latency]=$(grep "Speedtest.net" "$input_file" | grep -oP "[0-9]+\.[0-9]+ms" | grep -oP "[0-9]+\.[0-9]+")
+
+    # Parse other test locations (store first 3 non-Speedtest.net results)
+    local test_locations=$(grep -E "洛杉矶|日本|联通|电信|移动|Los Angeles|Tokyo|China" "$input_file" | head -3)
+    if [ -n "$test_locations" ]; then
+        NETWORK_INFO[has_other_tests]="true"
+        NETWORK_INFO[other_tests]="$test_locations"
+    else
+        NETWORK_INFO[has_other_tests]="false"
+    fi
+}
 
 # Evaluate CPU performance level
 evaluate_cpu() {
@@ -155,27 +173,28 @@ evaluate_cpu() {
 evaluate_memory() {
     local read_speed="${MEMORY_INFO[read_speed]:-0}"
     local write_speed="${MEMORY_INFO[write_speed]:-0}"
-    local avg_speed=$(echo "scale=2; ($read_speed + $write_speed) / 2" | bc 2>/dev/null || echo "0")
+
+    # Use awk for floating point calculation instead of bc
+    local avg_speed=$(awk "BEGIN {printf \"%.2f\", ($read_speed + $write_speed) / 2}")
+
     local level=""
     local rating=""
     local type=""
 
-    # Convert to MB/s if needed
-    avg_speed_mb=$(echo "$avg_speed" | awk '{print $1}')
-
-    if (( $(echo "$avg_speed_mb >= 51200" | bc -l) )); then
+    # Use awk for comparisons instead of bc
+    if awk "BEGIN {exit !($avg_speed >= 51200)}"; then
         type="DDR5"
         level="优秀"
         rating="⭐⭐⭐⭐⭐"
-    elif (( $(echo "$avg_speed_mb >= 34816" | bc -l) )); then
+    elif awk "BEGIN {exit !($avg_speed >= 34816)}"; then
         type="DDR4 (双通道)"
         level="良好"
         rating="⭐⭐⭐⭐"
-    elif (( $(echo "$avg_speed_mb >= 20480" | bc -l) )); then
+    elif awk "BEGIN {exit !($avg_speed >= 20480)}"; then
         type="DDR4"
         level="一般"
         rating="⭐⭐⭐"
-    elif (( $(echo "$avg_speed_mb >= 10240" | bc -l) )); then
+    elif awk "BEGIN {exit !($avg_speed >= 10240)}"; then
         type="DDR3"
         level="及格"
         rating="⭐⭐"
@@ -188,7 +207,7 @@ evaluate_memory() {
     PERFORMANCE_SCORES[mem_level]="$level"
     PERFORMANCE_SCORES[mem_rating]="$rating"
     PERFORMANCE_SCORES[mem_type]="$type"
-    PERFORMANCE_SCORES[mem_speed]="$avg_speed_mb"
+    PERFORMANCE_SCORES[mem_speed]="$avg_speed"
 }
 
 # Evaluate disk performance level
@@ -199,18 +218,19 @@ evaluate_disk() {
     local rating=""
     local type=""
 
-    # Average 4K performance
-    local avg_4k=$(echo "scale=2; ($read_4k + $write_4k) / 2" | bc 2>/dev/null || echo "0")
+    # Use awk for floating point calculation
+    local avg_4k=$(awk "BEGIN {printf \"%.2f\", ($read_4k + $write_4k) / 2}")
 
-    if (( $(echo "$avg_4k >= 200" | bc -l) )); then
+    # Use awk for comparisons
+    if awk "BEGIN {exit !($avg_4k >= 200)}"; then
         type="NVMe SSD"
         level="优秀"
         rating="⭐⭐⭐⭐⭐"
-    elif (( $(echo "$avg_4k >= 50" | bc -l) )); then
+    elif awk "BEGIN {exit !($avg_4k >= 50)}"; then
         type="标准 SSD"
         level="良好"
         rating="⭐⭐⭐⭐"
-    elif (( $(echo "$avg_4k >= 10" | bc -l) )); then
+    elif awk "BEGIN {exit !($avg_4k >= 10)}"; then
         type="HDD 或 超售SSD"
         level="一般"
         rating="⭐⭐"
@@ -331,6 +351,8 @@ generate_markdown_report() {
 - ⭐⭐ 一般 (4K 10-40 MB/s): HDD 机械硬盘或超售 SSD
 - ⭐ 差 (4K <10 MB/s): 严重超售或性能极差
 
+{{NETWORK_SECTION}}
+
 ---
 
 ## 🎯 综合评价
@@ -351,9 +373,9 @@ generate_markdown_report() {
 
 ## 📝 备注
 
-本报告基于 [NodeSpec](https://github.com/spiritLHLS/ecs) 项目生成。
+本报告基于 [融合怪](https://github.com/spiritLHLS/ecs) 项目生成。
 
-测试基准和评估标准详见: [nodespec.md](https://github.com/spiritLHLS/ecs/blob/main/nodespec.md)
+测试基准和评估标准详见: [README_NEW_USER.md](https://github.com/oneclickvirt/ecs/blob/master/README_NEW_USER.md)
 
 ---
 
@@ -410,9 +432,27 @@ EOF
     sed -i "s|{{DISK_RATING}}|${PERFORMANCE_SCORES[disk_rating]:-N/A}|g" "$report_file"
     sed -i "s|{{DISK_LEVEL}}|${PERFORMANCE_SCORES[disk_level]:-N/A}|g" "$report_file"
 
-    # Usage suggestions based on overall performance
-    local suggestions=$(generate_usage_suggestions)
-    sed -i "s|{{USAGE_SUGGESTIONS}}|$suggestions|g" "$report_file"
+    # Network section (optional)
+    if [ -n "${NETWORK_INFO[speedtest_upload]}" ]; then
+        local network_section="### 网络性能测试\n\n#### Speedtest.net 测试结果\n- **上传速度**: ${NETWORK_INFO[speedtest_upload]:-N/A} Mbps\n- **下载速度**: ${NETWORK_INFO[speedtest_download]:-N/A} Mbps\n- **延迟**: ${NETWORK_INFO[speedtest_latency]:-N/A} ms\n"
+        # Use perl for multiline replacement
+        perl -i -pe "s|{{NETWORK_SECTION}}|$network_section|g" "$report_file" 2>/dev/null || sed -i "/{{NETWORK_SECTION}}/d" "$report_file"
+    else
+        sed -i "/{{NETWORK_SECTION}}/d" "$report_file"
+    fi
+
+    # Usage suggestions - write directly to avoid sed multiline issues
+    local temp_file="${report_file}.tmp"
+    generate_usage_suggestions > /tmp/suggestions.txt
+    awk '
+        /{{USAGE_SUGGESTIONS}}/ {
+            system("cat /tmp/suggestions.txt")
+            next
+        }
+        { print }
+    ' "$report_file" > "$temp_file"
+    mv "$temp_file" "$report_file"
+    rm -f /tmp/suggestions.txt
 
     echo "$report_file"
 }
@@ -423,48 +463,44 @@ generate_usage_suggestions() {
     local mem_level="${PERFORMANCE_SCORES[mem_level]}"
     local disk_level="${PERFORMANCE_SCORES[disk_level]}"
 
-    local suggestions=""
-
     # Based on CPU performance
     case "$cpu_level" in
         "第一梯队+"*|"第一梯队"*)
-            suggestions+="✅ **CPU**: 性能优秀,适合高负载计算任务、视频转码、科学计算等\n"
+            echo "✅ **CPU**: 性能优秀,适合高负载计算任务、视频转码、科学计算等"
             ;;
         "第二梯队"*)
-            suggestions+="✅ **CPU**: 性能良好,适合一般应用服务器、Web服务等\n"
+            echo "✅ **CPU**: 性能良好,适合一般应用服务器、Web服务等"
             ;;
         *)
-            suggestions+="⚠️ **CPU**: 性能一般,建议用于轻量级任务\n"
+            echo "⚠️ **CPU**: 性能一般,建议用于轻量级任务"
             ;;
     esac
 
     # Based on Memory performance
     case "$mem_level" in
         "优秀"*)
-            suggestions+="✅ **内存**: 性能优秀,适合内存密集型应用、数据库等\n"
+            echo "✅ **内存**: 性能优秀,适合内存密集型应用、数据库等"
             ;;
         "良好"*)
-            suggestions+="✅ **内存**: 性能良好,可满足大多数应用需求\n"
+            echo "✅ **内存**: 性能良好,可满足大多数应用需求"
             ;;
         *)
-            suggestions+="⚠️ **内存**: 可能存在超售,不建议用于内存敏感应用\n"
+            echo "⚠️ **内存**: 可能存在超售,不建议用于内存敏感应用"
             ;;
     esac
 
     # Based on Disk performance
     case "$disk_level" in
         "优秀"*)
-            suggestions+="✅ **磁盘**: NVMe SSD性能优秀,适合数据库、高IO应用\n"
+            echo "✅ **磁盘**: NVMe SSD性能优秀,适合数据库、高IO应用"
             ;;
         "良好"*)
-            suggestions+="✅ **磁盘**: SSD性能良好,适合一般应用\n"
+            echo "✅ **磁盘**: SSD性能良好,适合一般应用"
             ;;
         *)
-            suggestions+="⚠️ **磁盘**: IO性能一般,不建议用于IO密集型应用\n"
+            echo "⚠️ **磁盘**: IO性能一般,不建议用于IO密集型应用"
             ;;
     esac
-
-    echo -e "$suggestions"
 }
 
 # Main function
@@ -489,6 +525,7 @@ main() {
     parse_cpu_test "$input_file"
     parse_memory_test "$input_file"
     parse_disk_test "$input_file"
+    parse_network_test "$input_file"
 
     _yellow "正在评估性能等级..."
 
