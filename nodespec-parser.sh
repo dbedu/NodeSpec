@@ -17,6 +17,9 @@ declare -A CPU_INFO
 declare -A MEMORY_INFO
 declare -A DISK_INFO
 declare -A NETWORK_INFO
+declare -A STREAMING_INFO
+declare -A IP_QUALITY_INFO
+declare -A ROUTE_INFO
 declare -A PERFORMANCE_SCORES
 
 # Parse system basic information
@@ -129,6 +132,74 @@ parse_network_test() {
     else
         NETWORK_INFO[has_other_tests]="false"
     fi
+}
+
+# Parse streaming media unlock results
+parse_streaming_unlock() {
+    local input_file="$1"
+
+    # Netflix
+    STREAMING_INFO[netflix]=$(grep -A 2 "Netflix" "$input_file" | grep -oP "(?<=NF所识别的IP地域信息：|Region: )\K[^\s]+" | head -1)
+    STREAMING_INFO[netflix_status]=$(grep -E "完整解锁|unlock|Not Available" "$input_file" | grep -i netflix | head -1)
+
+    # YouTube
+    STREAMING_INFO[youtube]=$(grep -A 2 "Youtube" "$input_file" | grep -oP "(?<=视频缓存节点地域: |CDN: )\K.*" | head -1)
+
+    # Disney+
+    STREAMING_INFO[disney]=$(grep -i "disney" "$input_file" | grep -oP "(?<=Region: )\K[^\s]+" | head -1)
+
+    # ChatGPT and AI services
+    STREAMING_INFO[chatgpt]=$(grep "ChatGPT" "$input_file" | grep -oP "Yes|No" | head -1)
+    STREAMING_INFO[gemini]=$(grep "Gemini" "$input_file" | grep -oP "Yes.*" | head -1)
+    STREAMING_INFO[claude]=$(grep "Claude" "$input_file" | grep -oP "Yes|No" | head -1)
+
+    # TikTok
+    STREAMING_INFO[tiktok]=$(grep "Tiktok Region" "$input_file" | grep -oP "\[.*\]" | tr -d '[]')
+}
+
+# Parse IP quality information
+parse_ip_quality() {
+    local input_file="$1"
+
+    # Abuse score
+    IP_QUALITY_INFO[abuse_score]=$(grep "滥用得分" "$input_file" | grep -oP "[0-9]+" | head -1)
+    IP_QUALITY_INFO[asn_abuse]=$(grep "ASN滥用得分" "$input_file" | grep -oP "[0-9]+\.[0-9]+" | head -1)
+
+    # Fraud score
+    IP_QUALITY_INFO[fraud_score]=$(grep "欺诈得分" "$input_file" | grep -oP "[0-9]+" | head -1)
+
+    # Usage type
+    IP_QUALITY_INFO[usage_type]=$(grep "使用类型:" "$input_file" | grep -oP "(?<=: ).*" | head -1)
+
+    # Company type
+    IP_QUALITY_INFO[company_type]=$(grep "公司类型:" "$input_file" | grep -oP "(?<=: ).*" | head -1)
+
+    # Security flags
+    IP_QUALITY_INFO[is_datacenter]=$(grep "是否数据中心:" "$input_file" | grep -oP "Yes|No" | head -1)
+    IP_QUALITY_INFO[is_proxy]=$(grep "是否代理:" "$input_file" | grep -oP "Yes|No" | head -1)
+    IP_QUALITY_INFO[is_vpn]=$(grep "是否VPN:" "$input_file" | grep -oP "Yes|No" | head -1)
+
+    # Google search
+    IP_QUALITY_INFO[google_search]=$(grep "Google搜索可行性" "$input_file" | grep -oP "YES|NO" | head -1)
+
+    # DNS blacklist
+    IP_QUALITY_INFO[dns_blacklist]=$(grep "DNS-黑名单:" "$input_file" | grep -oP "[0-9]+\(Clean\)\s+[0-9]+\(Blacklisted\)" | head -1)
+}
+
+# Parse route information
+parse_route_info() {
+    local input_file="$1"
+
+    # Parse upstream ISPs
+    ROUTE_INFO[tier1_isps]=$(grep -E "AS174|AS1299|AS3257|AS6453" "$input_file" | grep -oP "AS[0-9]+" | tr '\n' ' ')
+
+    # Parse China route types (电信/联通/移动)
+    ROUTE_INFO[ct_route]=$(grep "电信163\|电信CN2\|CN2 GIA\|CN2 GT" "$input_file" | head -1 | grep -oP "电信.*\[.*\]")
+    ROUTE_INFO[cu_route]=$(grep "联通4837\|联通9929" "$input_file" | head -1 | grep -oP "联通.*\[.*\]")
+    ROUTE_INFO[cm_route]=$(grep "移动CMI\|移动CMIN2" "$input_file" | head -1 | grep -oP "移动.*\[.*\]")
+
+    # Email port detection summary
+    ROUTE_INFO[smtp_available]=$(grep -A 20 "邮件端口检测" "$input_file" | grep -c "✔")
 }
 
 # Evaluate CPU performance level
@@ -351,7 +422,17 @@ generate_markdown_report() {
 - ⭐⭐ 一般 (4K 10-40 MB/s): HDD 机械硬盘或超售 SSD
 - ⭐ 差 (4K <10 MB/s): 严重超售或性能极差
 
+---
+
+## 🌐 网络与解锁测试
+
 {{NETWORK_SECTION}}
+
+{{STREAMING_SECTION}}
+
+{{IP_QUALITY_SECTION}}
+
+{{ROUTE_SECTION}}
 
 ---
 
@@ -434,11 +515,108 @@ EOF
 
     # Network section (optional)
     if [ -n "${NETWORK_INFO[speedtest_upload]}" ]; then
-        local network_section="### 网络性能测试\n\n#### Speedtest.net 测试结果\n- **上传速度**: ${NETWORK_INFO[speedtest_upload]:-N/A} Mbps\n- **下载速度**: ${NETWORK_INFO[speedtest_download]:-N/A} Mbps\n- **延迟**: ${NETWORK_INFO[speedtest_latency]:-N/A} ms\n"
-        # Use perl for multiline replacement
+        local network_section="### 网络速度测试\n\n#### Speedtest.net 测试结果\n- **上传速度**: ${NETWORK_INFO[speedtest_upload]:-N/A} Mbps\n- **下载速度**: ${NETWORK_INFO[speedtest_download]:-N/A} Mbps\n- **延迟**: ${NETWORK_INFO[speedtest_latency]:-N/A} ms\n"
         perl -i -pe "s|{{NETWORK_SECTION}}|$network_section|g" "$report_file" 2>/dev/null || sed -i "/{{NETWORK_SECTION}}/d" "$report_file"
     else
         sed -i "/{{NETWORK_SECTION}}/d" "$report_file"
+    fi
+
+    # Streaming unlock section
+    if [ -n "${STREAMING_INFO[netflix]}" ] || [ -n "${STREAMING_INFO[chatgpt]}" ]; then
+        cat > /tmp/streaming_section.txt << EOF
+### 流媒体解锁测试
+
+#### 主要流媒体平台
+- **Netflix**: ${STREAMING_INFO[netflix]:-未检测} ${STREAMING_INFO[netflix_status]:+- ${STREAMING_INFO[netflix_status]}}
+- **YouTube CDN**: ${STREAMING_INFO[youtube]:-未检测}
+- **Disney+**: ${STREAMING_INFO[disney]:-未检测}
+- **TikTok Region**: ${STREAMING_INFO[tiktok]:-未检测}
+
+#### AI 服务可用性
+- **ChatGPT**: ${STREAMING_INFO[chatgpt]:-未检测}
+- **Google Gemini**: ${STREAMING_INFO[gemini]:-未检测}
+- **Claude**: ${STREAMING_INFO[claude]:-未检测}
+
+*说明*: 解锁地区准确，但完整解锁判断仅供参考
+EOF
+        awk '
+            /{{STREAMING_SECTION}}/ {
+                system("cat /tmp/streaming_section.txt")
+                next
+            }
+            { print }
+        ' "$report_file" > "$report_file.tmp"
+        mv "$report_file.tmp" "$report_file"
+        rm -f /tmp/streaming_section.txt
+    else
+        sed -i "/{{STREAMING_SECTION}}/d" "$report_file"
+    fi
+
+    # IP Quality section
+    if [ -n "${IP_QUALITY_INFO[usage_type]}" ]; then
+        cat > /tmp/ipquality_section.txt << EOF
+### IP 质量检测
+
+#### 使用类型与安全信息
+- **使用类型**: ${IP_QUALITY_INFO[usage_type]:-未检测}
+- **公司类型**: ${IP_QUALITY_INFO[company_type]:-未检测}
+- **是否数据中心**: ${IP_QUALITY_INFO[is_datacenter]:-未检测}
+- **是否代理**: ${IP_QUALITY_INFO[is_proxy]:-未检测}
+- **是否VPN**: ${IP_QUALITY_INFO[is_vpn]:-未检测}
+
+#### 风险评分
+- **滥用得分**: ${IP_QUALITY_INFO[abuse_score]:-N/A} (越低越好)
+- **ASN滥用得分**: ${IP_QUALITY_INFO[asn_abuse]:-N/A}
+- **欺诈得分**: ${IP_QUALITY_INFO[fraud_score]:-N/A} (越低越好)
+
+#### 网络可用性
+- **Google搜索**: ${IP_QUALITY_INFO[google_search]:-未检测}
+- **DNS黑名单**: ${IP_QUALITY_INFO[dns_blacklist]:-未检测}
+
+*说明*: 数据仅供参考，建议查询多个数据库比对
+EOF
+        awk '
+            /{{IP_QUALITY_SECTION}}/ {
+                system("cat /tmp/ipquality_section.txt")
+                next
+            }
+            { print }
+        ' "$report_file" > "$report_file.tmp"
+        mv "$report_file.tmp" "$report_file"
+        rm -f /tmp/ipquality_section.txt
+    else
+        sed -i "/{{IP_QUALITY_SECTION}}/d" "$report_file"
+    fi
+
+    # Route section
+    if [ -n "${ROUTE_INFO[tier1_isps]}" ] || [ -n "${ROUTE_INFO[ct_route]}" ]; then
+        cat > /tmp/route_section.txt << EOF
+### 路由与网络质量
+
+#### 上游连接
+- **Tier 1 ISPs**: ${ROUTE_INFO[tier1_isps]:-无}
+
+#### 回程路由 (到中国)
+- **电信回程**: ${ROUTE_INFO[ct_route]:-未检测}
+- **联通回程**: ${ROUTE_INFO[cu_route]:-未检测}
+- **移动回程**: ${ROUTE_INFO[cm_route]:-未检测}
+
+#### 邮件端口
+- **可用SMTP端口数**: ${ROUTE_INFO[smtp_available]:-0}
+
+*说明*: 优质线路推荐 CN2 GIA > CN2 GT > 联通9929 > 普通163/4837/CMI
+EOF
+        awk '
+            /{{ROUTE_SECTION}}/ {
+                system("cat /tmp/route_section.txt")
+                next
+            }
+            { print }
+        ' "$report_file" > "$report_file.tmp"
+        mv "$report_file.tmp" "$report_file"
+        rm -f /tmp/route_section.txt
+    else
+        sed -i "/{{ROUTE_SECTION}}/d" "$report_file"
     fi
 
     # Usage suggestions - write directly to avoid sed multiline issues
@@ -526,6 +704,9 @@ main() {
     parse_memory_test "$input_file"
     parse_disk_test "$input_file"
     parse_network_test "$input_file"
+    parse_streaming_unlock "$input_file"
+    parse_ip_quality "$input_file"
+    parse_route_info "$input_file"
 
     _yellow "正在评估性能等级..."
 
